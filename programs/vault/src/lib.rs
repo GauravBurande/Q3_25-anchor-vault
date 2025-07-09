@@ -1,15 +1,21 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*, system_program::{transfer, Transfer}};
 
 declare_id!("78MSmCkLMMh3LhrrWFRHRB3gPDSLRqLDkQALDmwqQ3rc");
-
 
 #[program]
 pub mod vault {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        msg!("Greetings from: {:?}", ctx.program_id);
-        Ok(())
+       ctx.accounts.initialize(&ctx.bumps)
+    }
+
+    pub fn deposit(ctx: Context<Payment>, amount: u64) -> Result<()> {
+       ctx.accounts.deposit(amount)
+    }
+
+    pub fn withdraw(ctx: Context<Payment>, amount: u64) -> Result<()> {
+       ctx.accounts.withdraw(amount)
     }
 }
 
@@ -45,6 +51,62 @@ impl Initialize<'_> {
     }
 }
 
+#[derive(Accounts)]
+pub struct Payment<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds =[b"vault", user.key.as_ref()],
+        bump
+    )]
+        // this is where the vault will actually be created because here we are depositing the sol
+    pub vault: SystemAccount<'info>,
+    
+    #[account(
+        seeds = [b"state", user.key.as_ref()],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+        // system program is needed to transfer the native sol
+    pub system_program: Program<'info, System>
+}
+
+impl<'info> Payment<'info> {
+    pub fn deposit(&mut self, amount: u64) -> Result<()> {
+        let cpi_program = self.system_program.to_account_info();
+        let cpi_accounts = Transfer{
+            from: self.user.to_account_info(),
+            to: self.vault.to_account_info()
+        };
+
+        let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
+
+        transfer(cpi_context, amount)
+    }
+
+    pub fn withdraw(&mut self, amount: u64) -> Result<()> {
+        let cpi_program = self.system_program.to_account_info();
+        let cpi_accounts = Transfer{
+            from:self.vault.to_account_info(),
+            to: self.user.to_account_info()
+        };
+
+        let vault_seeds = &[
+            b"vault",
+            self.user.key.as_ref(),
+            &[self.vault_state.vault_bump]
+        ];
+
+        let signer_seeds = &[&vault_seeds[..]];
+
+        let cpi_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
+
+        transfer(cpi_context, amount)
+    }
+}
 
 #[account]
 pub struct VaultState {
